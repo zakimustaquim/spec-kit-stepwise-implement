@@ -1,0 +1,185 @@
+name: Release
+
+# Tag push publishes. workflow_dispatch validates and builds the same assets
+# without publishing, so the pipeline can be exercised before a tag exists —
+# a tag is hard to retract once anyone has installed from it.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to simulate (dry run, e.g. v0.1.0). Defaults to the manifest version."
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload its assets
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: python -m pip install --disable-pip-version-check pyyaml
+
+      - name: Resolve release identity
+        id: identity
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+            publish=true
+          else
+            tag="${INPUT_TAG:-v$(python -c 'import yaml;print(yaml.safe_load(open("extension.yml"))["extension"]["version"])')}"
+            publish=false
+          fi
+          # A hyphen in the version marks a pre-release (v1.0.0-rc1). GitHub keeps
+          # pre-releases out of /releases/latest/, so the catalog URL published by
+          # a stable release keeps resolving to the stable asset.
+          case "$tag" in *-*) prerelease=true ;; *) prerelease=false ;; esac
+          # The commit's own date, not the run's clock: re-running this workflow on
+          # the same commit must produce identical assets.
+          updated_at="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)"
+          {
+            echo "tag=$tag"
+            echo "publish=$publish"
+            echo "prerelease=$prerelease"
+            echo "updated_at=$updated_at"
+          } >> "$GITHUB_OUTPUT"
+          echo "tag=$tag publish=$publish prerelease=$prerelease updated_at=$updated_at"
+
+      - name: Validate manifest
+        run: python .github/scripts/check_manifest.py --tag "${{ steps.identity.outputs.tag }}"
+
+      - name: Validate against spec-kit's own validator
+        run: |
+          set -euo pipefail
+          # Best effort by design: this is the authoritative check, but a failure
+          # to *install* spec-kit must not block a release. check_manifest.py
+          # reports an unavailable import as "skipped" and still fails the job on
+          # a genuine validation error.
+          python -m pip install --disable-pip-version-check \
+            "specify-cli @ git+https://github.com/github/spec-kit@main" \
+            || echo "::warning::could not install spec-kit; skipping its validator"
+          python .github/scripts/check_manifest.py \
+            --tag "${{ steps.identity.outputs.tag }}" --with-speckit
+
+      - name: Build assets
+        run: |
+          python .github/scripts/build_assets.py \
+            --tag "${{ steps.identity.outputs.tag }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --updated-at "${{ steps.identity.outputs.updated_at }}" \
+            --out dist
+
+      - name: Verify the archive installs
+        run: |
+          set -euo pipefail
+          # An archive that unpacks to the wrong shape fails at the user's install,
+          # not here — so assert the shape spec-kit looks for: extension.yml at the
+          # root, and every declared command file present inside the zip.
+          python - <<'PY'
+          import sys, yaml, zipfile
+          names = set(zipfile.ZipFile("dist/" + yaml.safe_load(open("extension.yml"))["extension"]["id"] + ".zip").namelist())
+          manifest = yaml.safe_load(open("extension.yml"))
+          missing = ["extension.yml"] if "extension.yml" not in names else []
+          missing += [c["file"] for c in manifest["provides"]["commands"] if c["file"] not in names]
+          if missing:
+              print("::error::archive is missing: " + ", ".join(missing)); sys.exit(1)
+          print(f"archive shape OK ({len(names)} entries)")
+          PY
+
+      - name: Extract release notes
+        run: |
+          set -euo pipefail
+          python - "${{ steps.identity.outputs.tag }}" <<'PY' > release-notes.md
+          import re, sys
+          from pathlib import Path
+
+          tag = sys.argv[1]
+          version = tag[1:] if tag.startswith("v") else tag
+          changelog = Path("CHANGELOG.md")
+          body = ""
+          if changelog.is_file():
+              text = changelog.read_text(encoding="utf-8")
+              # Capture from this version's heading up to the next version heading.
+              match = re.search(
+                  rf"^## \[{re.escape(version)}\].*?$(.*?)(?=^## \[|\Z)",
+                  text, re.MULTILINE | re.DOTALL,
+              )
+              if match:
+                  body = match.group(1).strip()
+          if not body:
+              print(f"::warning::no '## [{version}]' section in CHANGELOG.md; using a generic body", file=sys.stderr)
+              body = f"Release {version}."
+          print(body)
+          PY
+          cat release-notes.md
+
+      - name: Publish release
+        if: steps.identity.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.identity.outputs.tag }}
+          PRERELEASE: ${{ steps.identity.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          args=(--title "$TAG" --notes-file release-notes.md)
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$TAG" "${args[@]}" dist/*
+
+      - name: Upload dry-run assets
+        if: steps.identity.outputs.publish != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dry-run-assets
+          path: dist/
+          if-no-files-found: error
+
+      - name: Summary
+        if: always()
+        env:
+          TAG: ${{ steps.identity.outputs.tag }}
+          PUBLISH: ${{ steps.identity.outputs.publish }}
+        run: |
+          set -euo pipefail
+          ext_id="$(python -c 'import yaml;print(yaml.safe_load(open("extension.yml"))["extension"]["id"])')"
+          {
+            echo "## $ext_id $TAG"
+            echo
+            if [ "$PUBLISH" = "true" ]; then
+              echo "Published. Install with either route:"
+              echo
+              echo '```bash'
+              echo "specify extension add $ext_id --from https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ext_id}.zip"
+              echo '```'
+              echo
+              echo "Or register the catalog once, which also enables \`specify extension update\`:"
+              echo
+              echo '```bash'
+              echo "specify extension catalog add https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/catalog.json --name mine --install-allowed"
+              echo "specify extension add $ext_id"
+              echo '```'
+            else
+              echo "Dry run — nothing published. Assets are attached to this run as \`dry-run-assets\`."
+            fi
+            echo
+            echo '### Checksum'
+            echo
+            echo '```'
+            cat "dist/${ext_id}.zip.sha256" 2>/dev/null || echo "(no assets built)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

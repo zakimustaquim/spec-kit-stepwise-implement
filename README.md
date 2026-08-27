@@ -12,6 +12,26 @@ This command inverts that. It implements the next task, verifies it, shows you t
 
 ## Install
 
+From a published release:
+
+```bash
+specify extension add stepwise-implement \
+  --from https://github.com/zakimustaquim/spec-kit-stepwise-implement/releases/latest/download/stepwise-implement.zip
+```
+
+Or register the catalog once, which additionally makes `specify extension update` work — a `--from`
+install is pinned forever, because update resolves versions through a catalog and skips anything it
+cannot find in one:
+
+```bash
+specify extension catalog add \
+  https://github.com/zakimustaquim/spec-kit-stepwise-implement/releases/latest/download/catalog.json \
+  --name mine --install-allowed
+specify extension add stepwise-implement
+```
+
+For local development:
+
 ```bash
 cd /path/to/your/spec-kit-project
 specify extension add --dev /path/to/spec-kit-stepwise-implement
@@ -76,6 +96,34 @@ commands/speckit.stepwise-implement.run.md # the command prompt
 The primary command name is `speckit.stepwise-implement.run` because the manifest validator requires
 the `speckit.{extension-id}.{command}` three-segment form. `speckit.stepwise-implement` is
 registered as an alias, and is the name you type.
+
+## Releasing
+
+Tagging is what publishes. `.github/workflows/release.yml` runs on any `v*` tag and will:
+
+1. Fail the release if the tag and `extension.yml` version disagree — an extension that misreports
+   its own version after install is worse than a missing release.
+2. Validate the manifest structurally (PyYAML only, so a network failure cannot block a release),
+   then again with spec-kit's real validator. An unavailable validator is reported as *skipped*; a
+   validator that rejects the manifest fails the job.
+3. Build `<id>.zip` reproducibly — sorted entries, pinned timestamps — containing only
+   `extension.yml`, `commands/`, `LICENSE`, `README.md`, and `CHANGELOG.md`, with `extension.yml`
+   at the archive root. The published `.sha256` is therefore worth comparing.
+4. Assert the archive's shape before publishing, since a wrong shape otherwise fails at the user's
+   install rather than in CI.
+5. Publish the release with notes taken from this version's `CHANGELOG.md` section, attaching the
+   zip, its checksum, and `catalog.json`.
+
+```bash
+# bump extension.yml version and add the matching CHANGELOG section first
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+Run the workflow manually (`workflow_dispatch`) to exercise all of it without publishing — assets
+land on the run as `dry-run-assets`. Tags are hard to retract once someone has installed from them.
+
+A tag containing a hyphen (`v0.2.0-rc1`) publishes as a pre-release, which GitHub keeps out of
+`/releases/latest/` — so the catalog URL above keeps resolving to the last stable version.
 
 ## Reference
 
