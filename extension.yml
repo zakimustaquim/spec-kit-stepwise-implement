@@ -4,9 +4,9 @@ extension:
   id: "stepwise-implement"
   name: "Stepwise Implement"
   version: "0.1.0"
-  description: "Placeholder description — replace before publishing."
+  description: "Run tasks.md one task at a time with a human approval gate between units, logging deviations to deviations.md."
   category: "process"
-  effect: "read-only"
+  effect: "read-write"
   author: "Zaki Mustaquim"
   repository: "https://github.com/zakimustaquim/spec-kit-stepwise-implement"
   license: "MIT"
@@ -14,13 +14,20 @@ extension:
 
 requires:
   speckit_version: ">=0.1.0"
+  commands:
+    - "speckit.tasks"
 
 provides:
   commands:
-    - name: "speckit.stepwise-implement.example"
-      file: "commands/example.md"
-      description: "Placeholder command — replace with real functionality."
+    # The manifest pattern is speckit.{extension-id}.{command}, so the primary name
+    # carries a third segment. The two-segment alias is the invocation users type.
+    - name: "speckit.stepwise-implement.run"
+      file: "commands/speckit.stepwise-implement.run.md"
+      description: "Execute the next task (or batch) from tasks.md, then halt for approval"
+      aliases: ["speckit.stepwise-implement"]
 
 tags:
-  - "placeholder"
-  - "scaffold"
+  - "implementation"
+  - "workflow"
+  - "approval-gate"
+  - "deviations"

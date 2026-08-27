@@ -9,4 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Initial scaffold: manifest and one placeholder command.
+- `/speckit.stepwise-implement` — incremental alternative to `/speckit.implement`: one task per
+  turn, halt for approval, batch on request, and record human-directed departures in
+  `deviations.md` while leaving the planning artifacts untouched.
