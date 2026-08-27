@@ -1,0 +1,26 @@
+schema_version: "1.0"
+
+extension:
+  id: "stepwise-implement"
+  name: "Stepwise Implement"
+  version: "0.1.0"
+  description: "Placeholder description — replace before publishing."
+  category: "process"
+  effect: "read-only"
+  author: "Zaki Mustaquim"
+  repository: "https://github.com/zakimustaquim/spec-kit-stepwise-implement"
+  license: "MIT"
+  homepage: "https://github.com/zakimustaquim/spec-kit-stepwise-implement"
+
+requires:
+  speckit_version: ">=0.1.0"
+
+provides:
+  commands:
+    - name: "speckit.stepwise-implement.example"
+      file: "commands/example.md"
+      description: "Placeholder command — replace with real functionality."
+
+tags:
+  - "placeholder"
+  - "scaffold"
