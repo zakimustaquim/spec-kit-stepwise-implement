@@ -10,7 +10,7 @@ The release workflow reads the section matching the tag being built, so each ver
 
 ## [Unreleased]
 
-## [0.1.0]
+## [1.0.0]
 
 ### Added
 

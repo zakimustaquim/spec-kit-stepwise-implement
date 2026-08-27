@@ -99,31 +99,47 @@ registered as an alias, and is the name you type.
 
 ## Releasing
 
-Tagging is what publishes. `.github/workflows/release.yml` runs on any `v*` tag and will:
+The tag is the source of truth for the version — there is no manifest to bump by hand.
+`.github/workflows/release.yml` runs on any `v*` tag and will:
 
-1. Fail the release if the tag and `extension.yml` version disagree — an extension that misreports
-   its own version after install is worse than a missing release.
+1. Stamp `extension.yml`'s version and a `CHANGELOG.md` section from the tag, promoting anything
+   under `## [Unreleased]` into the new version's section.
 2. Validate the manifest structurally (PyYAML only, so a network failure cannot block a release),
    then again with spec-kit's real validator. An unavailable validator is reported as *skipped*; a
-   validator that rejects the manifest fails the job.
+   validator that rejects the manifest fails the job. The tag/version check still runs — it now
+   guards the stamper rather than the author.
 3. Build `<id>.zip` reproducibly — sorted entries, pinned timestamps — containing only
    `extension.yml`, `commands/`, `LICENSE`, `README.md`, and `CHANGELOG.md`, with `extension.yml`
    at the archive root. The published `.sha256` is therefore worth comparing.
 4. Assert the archive's shape before publishing, since a wrong shape otherwise fails at the user's
    install rather than in CI.
-5. Publish the release with notes taken from this version's `CHANGELOG.md` section, attaching the
-   zip, its checksum, and `catalog.json`.
+5. Publish the release with notes from this version's `CHANGELOG.md` section, attaching the zip, its
+   checksum, and `catalog.json`.
+6. Commit the stamped version back to the default branch, so the repo never disagrees with what was
+   published. This runs only after a successful publish — a failed release must not leave a bump
+   behind — and is authenticated with `GITHUB_TOKEN`, whose pushes do not trigger workflows, so it
+   cannot loop.
+
+So a release is just:
 
 ```bash
-# bump extension.yml version and add the matching CHANGELOG section first
-git tag v0.2.0 && git push origin v0.2.0
+# optionally add notes under ## [Unreleased] first
+git tag v1.1.0 && git push origin v1.1.0
 ```
 
-Run the workflow manually (`workflow_dispatch`) to exercise all of it without publishing — assets
-land on the run as `dry-run-assets`. Tags are hard to retract once someone has installed from them.
+Run the workflow manually (`workflow_dispatch`) to exercise everything except publishing and the
+commit-back — assets land on the run as `dry-run-assets`. Tags are hard to retract once someone has
+installed from them.
 
-A tag containing a hyphen (`v0.2.0-rc1`) publishes as a pre-release, which GitHub keeps out of
-`/releases/latest/` — so the catalog URL above keeps resolving to the last stable version.
+A tag containing a hyphen (`v1.1.0-rc1`) publishes as a pre-release. GitHub keeps those out of
+`/releases/latest/`, so the catalog URL above keeps resolving to the last stable version; the
+changelog promotion and the commit-back are both skipped, since a pre-release should not consume the
+next stable release's notes or move the default branch's version.
+
+> [!IMPORTANT]
+> A tag-triggered workflow runs the version of itself that exists **at that tag's commit**. Changing
+> `release.yml` on the default branch does not change what an existing tag does — delete and re-push
+> the tag so it points at a commit containing the new workflow.
 
 ## Reference
 

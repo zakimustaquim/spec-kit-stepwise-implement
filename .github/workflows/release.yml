@@ -23,6 +23,10 @@ jobs:
       contents: write # create the release and upload its assets
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the post-publish commit back to the default branch is
+          # a normal push rather than a shallow update.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -59,7 +63,23 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "tag=$tag publish=$publish prerelease=$prerelease updated_at=$updated_at"
 
+      - name: Stamp version from tag
+        env:
+          TAG: ${{ steps.identity.outputs.tag }}
+          PRERELEASE: ${{ steps.identity.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          # The tag decides the version. Stamping here means a release never fails
+          # on a manifest the author forgot to bump, and the published asset always
+          # reports the version it was released under.
+          args=(--tag "$TAG")
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=(--skip-changelog)
+          fi
+          python .github/scripts/stamp_version.py "${args[@]}"
+
       - name: Validate manifest
+        # The tag/version gate now guards the stamper rather than the author.
         run: python .github/scripts/check_manifest.py --tag "${{ steps.identity.outputs.tag }}"
 
       - name: Validate against spec-kit's own validator
@@ -140,6 +160,33 @@ jobs:
             args+=(--prerelease)
           fi
           gh release create "$TAG" "${args[@]}" dist/*
+
+      - name: Commit the version bump back to the default branch
+        # Only after a successful publish: the release is the thing that makes the
+        # version real, so a failed publish must not leave a bump behind. Skipped
+        # for pre-releases, which should not move the default branch's version.
+        if: steps.identity.outputs.publish == 'true' && steps.identity.outputs.prerelease != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          branch="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$branch"
+          # -f discards the stamped tree from the tag checkout; the assets are
+          # already built and published, and the branch is re-stamped below.
+          git checkout -f -B "$branch" "origin/$branch"
+          python .github/scripts/stamp_version.py --tag "$TAG"
+          if git diff --quiet; then
+            echo "$branch already declares ${TAG#v} — nothing to commit"
+            exit 0
+          fi
+          git commit -am "Release ${TAG#v}"
+          # A push authenticated with GITHUB_TOKEN does not trigger workflows, so
+          # this cannot loop back into another release run.
+          git push origin "HEAD:$branch"
 
       - name: Upload dry-run assets
         if: steps.identity.outputs.publish != 'true'
